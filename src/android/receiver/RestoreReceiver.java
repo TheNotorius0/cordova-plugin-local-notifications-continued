@@ -27,8 +27,13 @@ import android.app.AlarmManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.util.Log;
 
+import androidx.core.app.NotificationChannelCompat;
+import androidx.core.app.NotificationManagerCompat;
+
+import java.util.Date;
 import java.util.List;
 
 import de.appplant.cordova.plugin.localnotification.Manager;
@@ -62,9 +67,51 @@ public class RestoreReceiver extends BroadcastReceiver {
             List<Notification> notifications = new Manager(context).getNotificationsFromSharedPreferences();
             Log.d(TAG, "Restoring notifications, count: " + notifications.size());
 
+            SharedPreferences.Editor editor = Manager.getSharedPreferences(context).edit();
+            int removedCount = 0;
+
             for (Notification notification : notifications) {
+                // A past last occurrence that Android cannot show can never be clicked or cleared,
+                // so it would stay stored forever and be restored again on every reboot and app update
+                if (isPastLastOccurrence(notification) && !canBeShown(context, notification)) {
+                    editor.remove(notification.getSharedPreferencesKeyOptions())
+                        .remove(notification.getSharedPreferencesKeyOccurrence())
+                        .remove(notification.getSharedPreferencesKeyTriggerBaseDate())
+                        .remove(notification.getSharedPreferencesKeyTriggerDate());
+                    removedCount++;
+                    continue;
+                }
+
                 notification.schedule();
             }
+
+            // One write for all removals instead of one per notification
+            editor.apply();
+            Log.d(TAG, "Removed notifications that cannot be shown, count: " + removedCount);
         }
+    }
+
+    /**
+     * Checks if the notification was due in the past and has no next occurrence.
+     */
+    private boolean isPastLastOccurrence(Notification notification) {
+        Date triggerDate = notification.getTriggerHandler().getTriggerDate();
+        return triggerDate != null && !triggerDate.after(new Date()) &&
+            notification.getTriggerHandler().isLastOccurrence();
+    }
+
+    /**
+     * Checks if Android can show the notification: the notifications of the app
+     * and the channel of the notification must be enabled.
+     */
+    private boolean canBeShown(Context context, Notification notification) {
+        NotificationManagerCompat notificationManager = NotificationManagerCompat.from(context);
+        if (!notificationManager.areNotificationsEnabled()) return false;
+
+        // Null before Android 8 or if the channel was not created yet
+        NotificationChannelCompat channel = notificationManager.getNotificationChannelCompat(
+            notification.getOptions().getAndroidChannelId());
+
+        return channel == null || channel.getImportance() != NotificationManagerCompat.IMPORTANCE_NONE;
     }
 }
